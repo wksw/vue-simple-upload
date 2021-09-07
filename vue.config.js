@@ -1,6 +1,7 @@
 module.exports = {
   outputDir: 'temp',
   devServer: {
-    disableHostCheck: true
+    disableHostCheck: true,
+    port: 3000
   }
 };

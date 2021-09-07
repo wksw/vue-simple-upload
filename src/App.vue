@@ -29,7 +29,7 @@ export default {
   data: () => ({
     accepts: 'image/png',
     acceptsObj: {
-      video: ['video/mp4'],
+      video: ['*'],
       image: [
         'image/png',
         'image/gif',
@@ -62,17 +62,22 @@ export default {
       type: 'video'
     },
     limit: 20,
-    chunkSize: 50 * 1024 * 1024,
+    chunkSize: 10 * 1024 * 1024,
     share: 1 // 是否共享 0私有  1共享
   }),
   computed: {
     headers() {
       return {
-        Authorization: 'token'
+        Authorization: 'jJJfk5ssHIW_0Q6ivrO5dP23-PrDxoiKN52oiQHR2JrUyKfvsJ3e9xrOM-c8cNmTWxt3IhMJYZpYVJCVzLnb-eQ_Mi516SeHt8ueyDZWqp2PIptX0VdqJPIuoACHamaDHjToUINmO9UeAp-sZMpVPynZlIelMTA5vPhUSpjASovBhok_aHATcEIulaVMC6qyAFAT841XgOhuGNHWRX_z4U6LwYJi2EGzDaSHqfRs0FykfqIuMb3zyp2b8nDrPj-u5-ooMkFeIJlDi9ABCRYEZKOSb1QDJmITfVw-eeWiGru3tmLmvmGtLe6XVh3Qpf5QRN5x6id7U0dWU1NU42hsPhPV2fDFp5o8QcITfOdlmE1crrwezdnWmQ1zc2tjNZ7r3P1yNg3ietoEr8t_cFg65iGg4BoCjk337LSJ85wvJkvl6BoHWeE9aBVqLhCCOJ_SYsBNdXxkAbdBf4xZzBENPNv0O1cRIvL-ohI2KplLA89N_WT5syfZeBXpLj7svW_d-jq_p5W1dBPdW5uqbm4WjtkDfGdLZWhcPfnERSZDDNrDtBgRBONKZmpxYT7Q68rCqGBW_42NR3E9vpXiHTfpD2L9mrL09N3-PE0_NRvz_0_vZH33VOCEIWLdhWD2GwAA__8',
+        // 'Paasport-App-Id': '1400397007335464961',
+        'Paasport-App-Id': '1258518235020660736',
+        // 'Paasport-Device-Id': '102755df-682e-49b7-be56-d00fbd35bb71-abc123'
+        'Paasport-Device-Id': '81bec2c5-872f-48b1-965c-3e834df0ac47'
       };
     },
     baseUrl() {
-      return 'http://localhost:3000';
+      // return 'https://passport-gw.zielhome.com';
+      return 'http://wksw.com:9091';
     },
     uploadType() {
       return this.uploadArguments.type;
@@ -92,7 +97,8 @@ export default {
   methods: {
     beforeUpload(file) {
       console.log('beforeAvatarUpload -> file', file);
-      if (this.acceptsObj[this.uploadType].indexOf(file.type) === -1) {
+      console.log(this.acceptsObj[this.uploadType].indexOf('*'));
+      if (this.acceptsObj[this.uploadType].indexOf(file.type) === -1 && this.acceptsObj[this.uploadType].indexOf('*') !== 0) {
         this.$notify({
           message: '只能上传' + this.acceptDesc[this.uploadType],
           type: 'warning',
@@ -123,7 +129,7 @@ export default {
       this.$refs.upload.clearFiles();
     },
     success() {
-      // this.$message('上传成功');
+      this.$message('上传成功');
     },
     // 属性限制
     async propertyRestrictions(file) {

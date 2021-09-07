@@ -67,9 +67,6 @@
                 </template>
               </el-table-column>
             </el-table>
-            <div class="item-name">
-              <span>下载地址: {{ item.upload_info.download_path }}</span>
-            </div>
           </div>
         </el-collapse-item>
       </el-collapse>
@@ -151,13 +148,13 @@ export default {
       type: Object,
       default: null
     },
-    resourceType: {
-      type: String,
-      default: 'community'
-    },
     beforeUpload: {
       type: Function,
       default: null
+    },
+    resourceType: {
+      type: String,
+      default: 'community'
     },
     accept: {
       type: String,
@@ -214,7 +211,7 @@ export default {
     uploadFiles: [],
     worker: null,
     cancels: [], // 存储要取消的请求
-    tempThreads: 10,
+    tempThreads: 3,
     // 默认状态
     status: Status.wait
   }),
@@ -282,52 +279,51 @@ export default {
         this.handleStart(item);
       });
     },
-    handleStart(rawFile) {
-      // 初始化部分自定义属性
-      rawFile.status = fileStatus.wait;
-      rawFile.chunkList = [];
-      rawFile.uploadProgress = 0;
-      rawFile.fakeUploadProgress = 0; // 假进度条，处理恢复上传后，进度条后移的问题
-      rawFile.hashProgress = 0;
-      rawFile.upload_info = {download_path: ''};
-      if (this.beforeUpload) {
-        const before = this.beforeUpload(rawFile);
-        if (before && before.then) {
-          before.then((res) => {
-            this.uploadFiles.push(rawFile);
-          });
-        }
-      }
-
-      if (!this.beforeUpload) {
-        this.uploadFiles.push(rawFile);
-      }
-    },
-    async uploadInit(rawFile) {
-      console.log('uploadInit -> file', rawFile);
+    async handleStart(rawFile) {
+      console.log('handleStart ', rawFile);
+      const fileChunkList = this.createFileChunk(rawFile, rawFile.Size);
+      rawFile.hash = await this.calculateHash(fileChunkList);
+      console.log('file md5', rawFile.md5);
       return new Promise((resolve, reject) => {
         const obj = {
           filename: rawFile.name,
           file_size: rawFile.size,
           file_type: rawFile.type,
-          file_md5: rawFile.hash,
+          // file_md5: rawFile.hash,
           resource_type: this.resourceType
         };
+
         instance
           .get('a1/file/multipartupload/init', { params: obj }, {
             timeout: 0
           })
           .then((res) => {
+            console.log('resp', res);
             rawFile.upload_id = res.data.upload_id;
+            rawFile.status = fileStatus.wait;
+            rawFile.chunkList = fileChunkList;
+            rawFile.uploadProgress = 0;
+            rawFile.fakeUploadProgress = 0; // 假进度条，处理恢复上传后，进度条后移的问题
+            rawFile.hashProgress = 0;
             // 如果下载地址不为空则说明已经上传过了
             if (res.data.download_path !== '') {
               rawFile.upload_info = res.data;
               rawFile.status = fileStatus.secondPass;
               rawFile.uploadProgress = 100;
               rawFile.hashProgress = 100;
-              this.isAllStatus();
             }
-            resolve();
+            if (this.beforeUpload) {
+              const before = this.beforeUpload(rawFile);
+              if (before && before.then) {
+                before.then((res) => {
+                  this.uploadFiles.push(rawFile);
+                });
+              }
+            }
+
+            if (!this.beforeUpload) {
+              this.uploadFiles.push(rawFile);
+            }
           })
           .catch((err) => {
             console.log('init -> err', err);
@@ -340,6 +336,7 @@ export default {
       if (!this.uploadFiles) return;
       this.status = Status.uploading;
       const filesArr = this.uploadFiles;
+
       for (let i = 0; i < filesArr.length; i++) {
         fileIndex = i;
         if (['secondPass', 'success', 'error'].includes(filesArr[i].status)) {
@@ -347,17 +344,13 @@ export default {
           continue;
         }
 
-        const fileChunkList = this.createFileChunk(filesArr[i]);
+        // const fileChunkList = this.createFileChunk(filesArr[i]);
 
         // 若不是恢复，再进行hash计算
         if (filesArr[i].status !== 'resume') {
           this.status = Status.hash;
           // hash校验，是否为秒传
-          filesArr[i].hash = await this.calculateHash(fileChunkList);
-          await this.uploadInit(filesArr[i]);
-          if (filesArr[i].upload_info.download_path !== '') {
-            continue;
-          }
+          // filesArr[i].hash = await this.calculateHash(fileChunkList);
 
           // 若清空或者状态为等待，则跳出循环
           if (this.status === Status.wait) {
@@ -369,28 +362,38 @@ export default {
         }
 
         this.status = Status.uploading;
+        console.log('handleUpload -> filesArr[i]', filesArr[i]);
+        const verifyRes = await this.verifyUpload(filesArr[i].upload_id, filesArr[i].hash, i);
+        if (verifyRes.download_path !== undefined) {
+          console.log('handleUpload -> chunk uploaded', i);
+          filesArr[i].status = fileStatus.secondPass;
+          filesArr[i].uploadProgress = 100;
+          filesArr[i].upload_info = verifyRes;
+          this.isAllStatus();
+        } else {
+          console.log('开始上传文件----》', filesArr[i].name);
+          filesArr[i].status = fileStatus.uploading;
 
-        console.log('开始上传文件----》', filesArr[i].name);
-        filesArr[i].status = fileStatus.uploading;
+          const getChunkStorage = this.getChunkStorage(filesArr[i].hash);
+          filesArr[i].fileHash = filesArr[i].hash; // 文件的hash，合并时使用
+          filesArr[i].chunkList = filesArr[i].chunkList.map(({ file }, index) => ({
+          // filesArr[i].chunkList = fileChunkList.map(({ file }, index) => ({
+            fileHash: filesArr[i].hash,
+            fileName: filesArr[i].name,
+            index,
+            hash: filesArr[i].hash + '-' + index,
+            chunk: file,
+            size: file.size,
+            uploaded: getChunkStorage && getChunkStorage.includes(index), // 标识：是否已完成上传
+            progress: getChunkStorage && getChunkStorage.includes(index) ? 100 : 0,
+            status: getChunkStorage && getChunkStorage.includes(index) ? 'success' : 'wait' // 上传状态，用作进度状态显示
+          }));
 
-        const getChunkStorage = this.getChunkStorage(filesArr[i].hash);
-        filesArr[i].fileHash = filesArr[i].hash; // 文件的hash，合并时使用
-        filesArr[i].chunkList = fileChunkList.map(({ file }, index) => ({
-          fileHash: filesArr[i].hash,
-          fileName: filesArr[i].name,
-          index,
-          hash: filesArr[i].hash,
-          chunk: file,
-          size: file.size,
-          uploaded: getChunkStorage && getChunkStorage.includes(index), // 标识：是否已完成上传
-          progress: getChunkStorage && getChunkStorage.includes(index) ? 100 : 0,
-          status: getChunkStorage && getChunkStorage.includes(index) ? 'success' : 'wait' // 上传状态，用作进度状态显示
-        }));
+          this.$set(filesArr, i, filesArr[i]);
 
-        this.$set(filesArr, i, filesArr[i]);
-
-        console.log('handleUpload ->  this.chunkData', filesArr[i]);
-        await this.uploadChunks(filesArr[i]);
+          console.log('handleUpload ->  this.chunkData', filesArr[i]);
+          await this.uploadChunks(filesArr[i]);
+        }
       }
     },
     // 将切片传输给服务端
@@ -400,11 +403,12 @@ export default {
       return new Promise(async (resolve, reject) => {
         const requestDataList = chunkData
           .filter(({ uploaded }) => !uploaded)
-          .map(({ fileHash, chunk, fileName, index }) => {
+          .map(({ hash, chunk, fileName, index }) => {
             const formData = new FormData();
-            formData.append('upload_id', data.upload_id);
+            // formData.append('chunk_md5', hash);
             formData.append('file', chunk);
             formData.append('chunk_num', index); // 文件名使用切片的下标
+            formData.append('upload_id', data.upload_id);
 
             return { formData, index, fileName };
           });
@@ -521,6 +525,7 @@ export default {
     },
     // 通知服务端合并切片
     mergeRequest(data) {
+      console.log('mergeRequest -> start', data);
       return new Promise((resolve, reject) => {
         const obj = {
           upload_id: data.upload_id
@@ -531,13 +536,15 @@ export default {
             timeout: 0
           })
           .then((res) => {
+            console.log('mertgeRequest -> success', res.data);
             // 清除storage
             if (res.data.download_path !== '') {
+              console.log('multipart upload merge', data);
               data.status = fileStatus.success;
-              console.log('mergeRequest -> data', data);
               data.upload_info = res.data;
+              console.log('mergeRequest -> data', data);
               clearLocalStorage(data.fileHash);
-              // this.$message.success('上传成功');
+              this.$message.success('上传成功');
               // 判断是否所有都成功上传
               this.isAllStatus();
               resolve();
@@ -643,6 +650,8 @@ export default {
       if (currentFile) {
         const uploadProgress = currentFile.chunkList.map((item) => item.size * item.progress).reduce((acc, cur) => acc + cur);
         const currentFileProgress = parseInt((uploadProgress / currentFile.size).toFixed(2));
+        console.log('fileProgress -> uploadProgress', uploadProgress);
+        console.log('fileProgress -> currentFileProgress', currentFileProgress);
 
         // 真假进度条处理--处理进度条后移
         if (!currentFile.fakeUploadProgress) {
@@ -785,7 +794,7 @@ export default {
         z-index: 10;
       }
       .item-progress {
-        flex: 0 0 50%;
+        flex: 0 0 60%;
       }
     }
   }
